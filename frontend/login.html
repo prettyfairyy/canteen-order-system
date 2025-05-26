@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Đăng nhập</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <style>
+    * {
+      box-sizing: border-box;
+      font-family: 'Quicksand', sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: #fef7f2;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+
+    .login-container {
+      background: #FEE4CC;
+      padding: 40px 30px;
+      border-radius: 20px;
+      box-shadow: 8px 8px 20px rgba(0, 0, 0, 0.1);
+      width: 320px;
+      text-align: center;
+    }
+
+    .login-container i.fa-key {
+      font-size: 40px;
+      color: #A73E14;
+      margin-bottom: 10px;
+    }
+
+    .login-container h2 {
+      margin: 10px 0 25px;
+      font-size: 24px;
+      color: #A73E14;
+    }
+
+    .input-box {
+      display: flex;
+      align-items: center;
+      background: #fff;
+      border-radius: 10px;
+      padding: 10px 14px;
+      margin-bottom: 15px;
+      border: 1px solid #ddd;
+    }
+
+    .input-box i {
+      color: #A73E14;
+      margin-right: 10px;
+    }
+
+    .input-box input {
+      border: none;
+      outline: none;
+      font-size: 14px;
+      flex: 1;
+    }
+
+    .login-container .forgot {
+      font-size: 13px;
+      color: #A73E14;
+      margin-bottom: 20px;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    .login-container button {
+      background: #F88601;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 12px 0;
+      width: 100%;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+
+    .login-container button:hover {
+      background: #e67800;
+    }
+
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <i class="fa-solid fa-key"></i>
+    <h2>Đăng nhập</h2>
+
+    <div class="input-box">
+      <i class="fa-solid fa-user"></i>
+      <input type="text" placeholder="Mã số sinh viên" id="student_id" />
+    </div>
+
+    <div class="input-box">
+      <i class="fa-solid fa-lock"></i>
+      <input type="password" placeholder="Mật khẩu" id="password" />
+      <i class="fa-solid fa-eye" style="cursor:pointer;" onclick="togglePassword(this)"></i>
+    </div>
+
+    <div class="forgot" onclick="alert('Tính năng đang phát triển')">Quên mật khẩu?</div>
+
+    <button onclick="login()">Đăng nhập</button>
+  </div>
+
+  <script>
+    function togglePassword(icon) {
+      const input = document.getElementById('password');
+      if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.replace('fa-eye', 'fa-eye-slash');
+      } else {
+        input.type = 'password';
+        icon.classList.replace('fa-eye-slash', 'fa-eye');
+      }
+    }
+
+    function login() {
+      const student_id = document.getElementById('student_id').value;
+      const password = document.getElementById('password').value;
+      if (!student_id || !password) return alert("Vui lòng nhập đầy đủ thông tin");
+
+      fetch("http://localhost:3000/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_id, password })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          localStorage.setItem("student_id", student_id);
+          location.href = "menu.html";
+        } else {
+          alert(data.message || "Đăng nhập thất bại");
+        }
+      })
+      .catch(() => alert("Không thể kết nối đến máy chủ"));
+    }
+  </script>
+</body>
+</html>
