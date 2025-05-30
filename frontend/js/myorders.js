@@ -9,8 +9,9 @@ async function loadOrders() {
 
   let total = 0;
 
+  // KHÔNG group – giữ nguyên từng order_item_id
   data.forEach(item => {
-    if (item.quantity === 0) return; // Ẩn món có số lượng 0
+    if (item.quantity === 0) return;
 
     const div = document.createElement('div');
     div.className = 'order';
@@ -39,6 +40,7 @@ async function loadOrders() {
   totalDiv.textContent = `Tổng: ${total.toLocaleString()} VNĐ`;
 }
 
+
 function confirmUpdate(order_item_id, newQty) {
   if (newQty === 0) {
     if (confirm('Bạn có chắc muốn xóa món này khỏi đơn hàng?')) {
@@ -52,11 +54,6 @@ function confirmUpdate(order_item_id, newQty) {
 async function updateQuantity(order_item_id, newQty) {
   if (newQty < 0 || newQty > 3) return alert('Mỗi món phải từ 0 đến 3 phần');
 
-  if (newQty === 0) {
-    const confirmDelete = confirm('Bạn có muốn xóa món này khỏi đơn hàng không?');
-    if (!confirmDelete) return;
-  }
-
   try {
     const res = await fetch('http://localhost:3000/orders/update', {
       method: 'PUT',
@@ -66,7 +63,7 @@ async function updateQuantity(order_item_id, newQty) {
 
     const data = await res.json();
     if (res.ok) {
-      loadOrders(); // reload sau khi update
+      await loadOrders();
     } else {
       alert(data.message);
     }
@@ -74,6 +71,5 @@ async function updateQuantity(order_item_id, newQty) {
     alert('Không thể cập nhật đơn hàng.');
   }
 }
-
 
 loadOrders();

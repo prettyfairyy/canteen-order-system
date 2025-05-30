@@ -137,23 +137,43 @@ function closeSelectPopup() {
   document.getElementById('selectDishPopup').style.display = 'none';
 }
 
-function confirmAddSelected() {
-  const today = new Date().toISOString().split('T')[0];
+async function confirmAddSelected() {
+  const now = new Date();
+const todayStr = now.getFullYear() + '-' +
+                 String(now.getMonth() + 1).padStart(2, '0') + '-' +
+                 String(now.getDate()).padStart(2, '0');
+
+
   const selected = document.querySelectorAll('#available-dishes-body input[type="checkbox"]:checked');
 
-  selected.forEach(async checkbox => {
-    const dishId = checkbox.value;
+  const insertPromises = [];
 
-    await fetch(`http://localhost:3000/dishes/add-available`, {
+  selected.forEach(checkbox => {
+    const dishId = checkbox.value;
+    const quantityInput = document.querySelector(`input[name="limit_${dishId}"]`);
+    const max_quantity = parseInt(quantityInput?.value || 1);
+
+    const insertPromise = fetch(`http://localhost:3000/admin-dishes/add-existing`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         dish_id: dishId,
-        serve_date: today
+        serve_date: todayStr,
+        max_quantity: max_quantity
       })
     });
+
+    insertPromises.push(insertPromise);
   });
 
+  await Promise.all(insertPromises); // đợi tất cả insert xong
+
   closeSelectPopup();
-  window.location.reload();
+  window.location.reload(); // bây giờ reload mới chính xác
 }
+
+document.getElementById('existingForm').addEventListener('submit', function (e) {
+  e.preventDefault();
+  confirmAddSelected();
+});
+

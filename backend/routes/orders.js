@@ -2,129 +2,130 @@ const express = require('express');
 const router = express.Router();
 const { pool, poolConnect, sql } = require('../db');
 
+function getTodayString() {
+  const now = new Date();
+  return now.getFullYear() + '-' +
+    String(now.getMonth() + 1).padStart(2, '0') + '-' +
+    String(now.getDate()).padStart(2, '0');
+}
 
-// Tạo đơn hàng mới
+// API: Đặt món ăn
 router.post('/', async (req, res) => {
-    // Lấy giờ hiện tại (giờ hệ thống)
-//const now = new Date();
-//const hour = now.getHours();
-
-//if (!(hour >= 19 || hour < 10)) {
-//  return res.status(403).json({ message: 'Chỉ được đặt món từ 19h đến 10h sáng hôm sau.' });
-//}
-
-
   const { student_id, items } = req.body;
+  const today = getTodayString();
 
   if (!student_id || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ message: 'Thiếu thông tin hoặc danh sách món ăn rỗng' });
   }
 
-  const today = new Date().toISOString().split('T')[0];
-
   try {
     await poolConnect;
-        // Kiểm tra món còn đủ số lượng không
-        for (const item of items) {
-        const check = await pool.request()
-            .input('dish_id', sql.Int, item.dish_id)
-            .query(`
-            SELECT max_quantity FROM dishes WHERE dish_id = @dish_id
-            `);
 
-        const available = check.recordset[0]?.max_quantity ?? 0;
+    // Kiểm tra tồn kho và serve_date hôm nay
+    for (const item of items) {
+      const check = await pool.request()
+        .input('dish_instance_id', sql.Int, item.dish_instance_id)
+        .input('today', sql.Date, today)
+        .query(`
+          SELECT max_quantity 
+          FROM dishes 
+          WHERE dish_instance_id = @dish_instance_id AND serve_date = @today
+        `);
 
-        if (item.quantity > available) {
-            return res.status(400).json({
-            message: `Món ${item.dish_id} không còn đủ số lượng. Chỉ còn ${available} phần.`
-            });
-        }
-        }
+      const available = check.recordset[0]?.max_quantity ?? 0;
+      if (item.quantity > available) {
+        return res.status(400).json({
+          message: `Món ${item.dish_instance_id} không còn đủ số lượng. Còn lại ${available}.`
+        });
+      }
+    }
 
-        const countResult = await pool.request()
-            .input('student_id', sql.VarChar, student_id)
-            .input('today', sql.Date, today)
-            .query(`
+    // Kiểm tra tổng số phần đã đặt hôm nay
+    const count = await pool.request()
+      .input('student_id', sql.VarChar, student_id)
+      .input('today', sql.Date, today)
+      .query(`
         SELECT SUM(oi.quantity) AS total_quantity
         FROM orders o
         JOIN order_items oi ON o.order_id = oi.order_id
         WHERE o.student_id = @student_id AND o.order_date = @today
-    `);
+      `);
 
-    const totalToday = countResult.recordset[0].total_quantity || 0;
-    const newQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
-
+    const totalToday = count.recordset[0].total_quantity || 0;
+    const newQuantity = items.reduce((sum, i) => sum + i.quantity, 0);
     if (totalToday + newQuantity > 3) {
-    return res.status(400).json({
-        message: 'Bạn chỉ được đặt tối đa 3 phần ăn mỗi ngày!'
-    });
+      return res.status(400).json({ message: 'Bạn chỉ được đặt tối đa 3 phần ăn mỗi ngày!' });
     }
+
+    // Tìm order hiện có
+    let order_id;
+    const existing = await pool.request()
+      .input('student_id', sql.VarChar, student_id)
+      .input('today', sql.Date, today)
+      .query(`SELECT order_id FROM orders WHERE student_id = @student_id AND order_date = @today`);
 
     const transaction = pool.transaction();
     await transaction.begin();
-
     const request = transaction.request();
 
-    // Tạo đơn hàng mới
-    const orderResult = await request
-      .input('student_id', sql.VarChar, student_id)
-      .input('order_date', sql.Date, today)
-      .query(`
-        INSERT INTO orders (student_id, order_date)
-        OUTPUT INSERTED.order_id
-        VALUES (@student_id, @order_date)
-      `);
+    if (existing.recordset.length > 0) {
+      order_id = existing.recordset[0].order_id;
+    } else {
+      const orderResult = await request
+        .input('student_id', sql.VarChar, student_id)
+        .input('order_date', sql.Date, today)
+        .query(`
+          INSERT INTO orders (student_id, order_date)
+          OUTPUT INSERTED.order_id
+          VALUES (@student_id, @order_date)
+        `);
+      order_id = orderResult.recordset[0].order_id;
+    }
 
-    const order_id = orderResult.recordset[0].order_id;
-
-    // Chèn các món ăn vào order_items
+    // Cập nhật/cộng dồn hoặc thêm mới món ăn
     for (const item of items) {
-        await transaction.request()
-            .input('order_id', sql.Int, order_id)
-            .input('dish_id', sql.Int, item.dish_id)
-            .input('quantity', sql.Int, item.quantity)
-            .query(`
-                INSERT INTO order_items (order_id, dish_id, quantity)
-                VALUES (@order_id, @dish_id, @quantity)
-            `);
-            await transaction.request()
-            .input('dish_id', sql.Int, item.dish_id)
-            .input('quantity', sql.Int, item.quantity)
-            .query(`
-                UPDATE dishes
-                SET max_quantity = max_quantity - @quantity
-                WHERE dish_id = @dish_id AND max_quantity >= @quantity
-            `);
-        }
+      const exist = await transaction.request()
+        .input('order_id', sql.Int, order_id)
+        .input('dish_instance_id', sql.Int, item.dish_instance_id)
+        .query(`
+          SELECT quantity 
+          FROM order_items 
+          WHERE order_id = @order_id AND dish_instance_id = @dish_instance_id
+        `);
 
+      if (exist.recordset.length > 0) {
+        await transaction.request()
+          .input('order_id', sql.Int, order_id)
+          .input('dish_instance_id', sql.Int, item.dish_instance_id)
+          .input('quantity', sql.Int, item.quantity)
+          .query('UPDATE order_items SET quantity = quantity + @quantity WHERE order_id = @order_id AND dish_instance_id = @dish_instance_id');
+      } else {
+        await transaction.request()
+          .input('order_id', sql.Int, order_id)
+          .input('dish_instance_id', sql.Int, item.dish_instance_id)
+          .input('quantity', sql.Int, item.quantity)
+          .query('INSERT INTO order_items (order_id, dish_instance_id, quantity) VALUES (@order_id, @dish_instance_id, @quantity)');
+      }
+
+      await transaction.request()
+        .input('dish_instance_id', sql.Int, item.dish_instance_id)
+        .input('quantity', sql.Int, item.quantity)
+        .query('UPDATE dishes SET max_quantity = max_quantity - @quantity WHERE dish_instance_id = @dish_instance_id');
+    }
 
     await transaction.commit();
-        // Sau khi commit, lấy thông tin chi tiết món vừa đặt
-    const orderDetails = await pool.request()
-    .input('order_id', sql.Int, order_id)
-    .query(`
-        SELECT d.dish_id, d.name, d.price, oi.quantity, d.image_url
-        FROM order_items oi
-        JOIN dishes d ON oi.dish_id = d.dish_id
-        WHERE oi.order_id = @order_id
-    `);
 
-    res.status(201).json({
-    message: 'Đặt món thành công',
-    order_id,
-    items: orderDetails.recordset
-    });
-
+    res.status(201).json({ message: 'Đặt món thành công' });
   } catch (err) {
     console.error('Lỗi khi đặt món:', err);
     res.status(500).json({ message: 'Lỗi máy chủ', error: err.message });
   }
 });
 
-// Xem các món đã đặt hôm nay
+// API: Lấy đơn hàng hôm nay
 router.get('/:student_id', async (req, res) => {
-  const { student_id } = req.params;
-  const today = new Date().toISOString().split('T')[0];
+  const student_id = req.params.student_id;
+  const today = getTodayString();
 
   try {
     await poolConnect;
@@ -132,73 +133,87 @@ router.get('/:student_id', async (req, res) => {
       .input('student_id', sql.VarChar, student_id)
       .input('today', sql.Date, today)
       .query(`
-        SELECT oi.order_item_id, d.name, d.price, oi.quantity,
-               d.image_url, o.order_date
+        SELECT 
+          oi.order_item_id,
+          oi.dish_instance_id,
+          d.dish_id,
+          d.name,
+          d.price,
+          d.image_url,
+          oi.quantity
         FROM orders o
         JOIN order_items oi ON o.order_id = oi.order_id
-        JOIN dishes d ON oi.dish_id = d.dish_id
+        JOIN dishes d ON oi.dish_instance_id = d.dish_instance_id
         WHERE o.student_id = @student_id AND o.order_date = @today
       `);
 
     res.status(200).json(result.recordset);
-
   } catch (err) {
-    console.error('Lỗi khi xem đơn hàng:', err);
+    console.error('Lỗi khi lấy đơn:', err);
     res.status(500).json({ message: 'Lỗi máy chủ', error: err.message });
   }
 });
 
+// Cập nhật hoặc xóa món ăn trong đơn
 router.put('/update', async (req, res) => {
   const { order_item_id, quantity } = req.body;
 
-  if (quantity < 0 || quantity > 3) {
-    return res.status(400).json({ message: 'Số lượng không hợp lệ' });
+  if (!order_item_id || quantity == null) {
+    return res.status(400).json({ message: 'Thiếu thông tin order_item_id hoặc quantity' });
   }
 
   try {
     await poolConnect;
 
-    const oldRes = await pool.request()
+    // Lấy dish_instance_id để xử lý tồn kho
+    const old = await pool.request()
       .input('order_item_id', sql.Int, order_item_id)
-      .query(`SELECT quantity, dish_id FROM order_items WHERE order_item_id = @order_item_id`);
+      .query(`SELECT dish_instance_id, quantity, order_id FROM order_items WHERE order_item_id = @order_item_id`);
+    
+    const item = old.recordset[0];
+    if (!item) return res.status(404).json({ message: 'Không tìm thấy món để cập nhật' });
 
-    if (!oldRes.recordset.length) {
-      return res.status(404).json({ message: 'Không tìm thấy món' });
-    }
+    const restoreQty = item.quantity;
+    const dish_instance_id = item.dish_instance_id;
+    const order_id = item.order_id;
 
-    const { quantity: oldQty, dish_id } = oldRes.recordset[0];
-    const diff = quantity - oldQty;
-
-    const tx = pool.transaction();
-    await tx.begin();
-    const reqTx = tx.request();
+    const transaction = pool.transaction();
+    await transaction.begin();
+    const request = transaction.request();
 
     if (quantity === 0) {
-      await reqTx
+      // Trả lại tồn kho và xóa món
+      await request
+        .input('dish_instance_id', sql.Int, dish_instance_id)
+        .input('qty', sql.Int, restoreQty)
+        .query('UPDATE dishes SET max_quantity = max_quantity + @qty WHERE dish_instance_id = @dish_instance_id');
+
+      await request
         .input('order_item_id', sql.Int, order_item_id)
-        .query(`DELETE FROM order_items WHERE order_item_id = @order_item_id`);
+        .query('DELETE FROM order_items WHERE order_item_id = @order_item_id');
+
+      // Nếu order không còn món → xóa luôn đơn
+      await request
+        .input('order_id', sql.Int, order_id)
+        .query(`
+          DELETE FROM orders
+          WHERE order_id = @order_id
+          AND NOT EXISTS (SELECT 1 FROM order_items WHERE order_id = @order_id)
+        `);
     } else {
-      await reqTx
+      // Cập nhật số lượng
+      await request
         .input('order_item_id', sql.Int, order_item_id)
         .input('quantity', sql.Int, quantity)
-        .query(`UPDATE order_items SET quantity = @quantity WHERE order_item_id = @order_item_id`);
+        .query('UPDATE order_items SET quantity = @quantity WHERE order_item_id = @order_item_id');
     }
 
-    await reqTx
-      .input('dish_id', sql.Int, dish_id)
-      .input('diff', sql.Int, diff)
-      .query(`UPDATE dishes SET max_quantity = max_quantity - @diff WHERE dish_id = @dish_id`);
-
-    await tx.commit();
+    await transaction.commit();
     res.status(200).json({ message: 'Cập nhật thành công' });
-
   } catch (err) {
-    console.error('Lỗi cập nhật số lượng:', err);
+    console.error('Lỗi cập nhật đơn hàng:', err);
     res.status(500).json({ message: 'Lỗi máy chủ', error: err.message });
   }
 });
 
 module.exports = router;
-
-
-
